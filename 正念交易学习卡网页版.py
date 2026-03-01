@@ -5,140 +5,190 @@ import time
 import json
 import os
 
-# --- 1. 页面配置 ---
-st.set_page_config(page_title="正念交易·考场", page_icon="🎓", layout="centered")
+# --- 1. 页面配置与美化 ---
+st.set_page_config(page_title="正念交易·全能终端", page_icon="🧘", layout="centered")
 
-# CSS 样式（保持 NotebookLM 风格并增加考场氛围）
 st.markdown("""
     <style>
-    .stApp { background-color: #F4F7F9; }
-    .exam-card {
-        background-color: white; padding: 30px; border-radius: 15px;
-        border-left: 5px solid #1A73E8; box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        margin-bottom: 20px;
+    .stApp { background-color: #F8F9FA; }
+    .card-box {
+        background-color: white; padding: 40px; border-radius: 20px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.08); min-height: 250px;
+        display: flex; flex-direction: column; justify-content: center;
+        align-items: center; text-align: center; border: 1px solid #E9ECEF;
+        margin: 20px 0;
     }
-    .question-text { font-size: 20px; font-weight: 600; color: #333; margin-bottom: 15px; }
-    .timer-text { font-size: 24px; font-weight: bold; color: #D93025; text-align: center; }
+    .q-text { font-size: 26px; color: #202124; font-weight: bold; margin-bottom: 20px; }
+    .a-text { font-size: 20px; color: #1A73E8; border-top: 2px dashed #E8F0FE; padding-top: 20px; }
+    .status-tag { font-size: 14px; padding: 2px 8px; border-radius: 10px; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 数据加载与处理 ---
-@st.cache_data
-def load_data():
-    df = pd.read_csv('flashcards.csv', header=None, names=['q', 'a'])
-    return df.to_dict('records')
+# --- 2. 核心数据加载 ---
+def load_all_data():
+    if not os.path.exists('flashcards.csv'):
+        st.error("❌ 找不到 flashcards.csv 文件，请确保它在 GitHub 仓库中。")
+        return []
+    try:
+        df = pd.read_csv('flashcards.csv', header=None, names=['q', 'a'])
+        return df.to_dict('records')
+    except Exception as e:
+        st.error(f"数据读取失败: {e}")
+        return []
 
-all_cards = load_data()
+all_cards = load_all_data()
 all_answers = [c['a'] for c in all_cards]
 
-# --- 3. 核心逻辑：生成考卷 ---
-def generate_exam(count=20):
-    exam_questions = random.sample(all_cards, min(count, len(all_cards)))
-    quiz_data = []
-    for item in exam_questions:
-        correct_split = item['a']
-        # 随机抽取 3 个错误答案
-        distractors = random.sample([a for a in all_answers if a != correct_split], 3)
-        options = distractors + [correct_split]
-        random.shuffle(options)
-        quiz_data.append({
-            "question": item['q'],
-            "options": options,
-            "answer": correct_split
-        })
-    return quiz_data
+# --- 3. 登录与进度管理 ---
+st.title("📓 正念交易·精进终端")
 
-# --- 4. Session State 初始化 ---
-if 'mode' not in st.session_state: st.session_state.mode = "学习"
-if 'exam_data' not in st.session_state: st.session_state.exam_data = None
-if 'start_time' not in st.session_state: st.session_state.start_time = None
-if 'submitted' not in st.session_state: st.session_state.submitted = False
+c_user, c_mode = st.columns([1, 1])
+with c_user:
+    u_name = st.text_input("👤 学员姓名", value="guest").strip()
+with c_mode:
+    app_mode = st.selectbox("🎮 模式选择", ["学习模式", "考试模式"])
 
-# --- 5. 侧边栏：模式切换 ---
-with st.sidebar:
-    st.title("🎯 模式选择")
-    mode = st.radio("请选择当前状态：", ["常规练习", "考场模式"])
-    st.session_state.mode = mode
+# 状态初始化
+state_key = f"user_data_{u_name}"
+if state_key not in st.session_state:
+    path = f"progress_{u_name}.json"
+    saved = None
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+        except: pass
     
-    if mode == "考场模式":
-        st.warning("⚠️ 考场规则：\n1. 随机 20 题\n2. 限时 30 分钟\n3. 提交后显示评分")
-        if st.button("🏁 开始新考试"):
-            st.session_state.exam_data = generate_exam(20)
-            st.session_state.start_time = time.time()
-            st.session_state.submitted = False
-            st.session_state.user_answers = {}
-            st.rerun()
+    st.session_state[state_key] = {
+        "mastered": set(saved['mastered']) if saved else set(),
+        "current_idx": saved['last_index'] if saved else 0,
+        "show_answer": False
+    }
 
-# --- 6. 渲染界面 ---
+user_data = st.session_state[state_key]
 
-# --- A. 常规练习模式 (保留你之前的代码逻辑) ---
-if st.session_state.mode == "常规练习":
-    st.title("📓 正念交易·精进指南")
-    st.info("当前为学习模式，请点击侧边栏进入考场模式进行测试。")
-    # (此处可插入你之前的闪卡代码，为简洁此处省略，实际使用时建议合并)
+def save_current():
+    with open(f"progress_{u_name}.json", "w", encoding="utf-8") as f:
+        json.dump({"mastered": list(user_data["mastered"]), "last_index": user_data["current_idx"]}, f)
 
-# --- B. 考场模式 ---
-else:
-    st.title("🎓 正念交易·模拟考场")
-    
-    if st.session_state.exam_data is None:
-        st.info("请点击左侧按钮“开始新考试”生成考卷。")
+# --- 4. 学习模式逻辑 (重制版) ---
+if app_mode == "学习模式":
+    # 快捷键支持脚本
+    st.markdown("""<script>
+        const doc = window.parent.document;
+        doc.onkeydown = function(e) {
+            if (e.keyCode === 32) doc.getElementById("btn-reveal").click();
+            else if (e.keyCode === 39) doc.getElementById("btn-next").click();
+            else if (e.keyCode === 37) doc.getElementById("btn-prev").click();
+        };</script>""", unsafe_allow_html=True)
+
+    if not all_cards:
+        st.warning("暂无题目数据。")
     else:
-        # 计时器逻辑
-        elapsed = time.time() - st.session_state.start_time
-        remaining = max(0, 1800 - int(elapsed)) # 30分钟 = 1800秒
-        
-        col1, col2 = st.columns([3, 1])
-        with col2:
-            st.markdown(f'<div class="timer-text">⏳ {remaining//60:02d}:{remaining%60:02d}</div>', unsafe_allow_html=True)
-        
-        if remaining <= 0 and not st.session_state.submitted:
-            st.error("⏰ 时间到！系统已自动交卷。")
-            st.session_state.submitted = True
+        # 进度显示
+        total = len(all_cards)
+        m_count = len(user_data["mastered"])
+        st.progress(m_count / total)
+        st.write(f"学员: **{u_name}** | 已内化: {m_count} / {total}")
 
-        # 显示题目
-        with st.form("exam_form"):
-            for i, q in enumerate(st.session_state.exam_data):
-                st.markdown(f'<div class="exam-card">', unsafe_allow_html=True)
-                st.markdown(f'<div class="question-text">{i+1}. {q["question"]}</div>', unsafe_allow_html=True)
-                
-                # 用户选择
-                st.session_state.user_answers[i] = st.radio(
-                    "选择正确答案：", 
-                    q["options"], 
-                    key=f"q{i}",
-                    index=None,
-                    label_visibility="collapsed"
-                )
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            submit_btn = st.form_submit_button("📤 提交考卷")
-            if submit_btn:
-                st.session_state.submitted = True
+        # 计算索引并获取题目
+        idx = user_data["current_idx"] % total
+        card = all_cards[idx]
+        is_m = card['q'] in user_data["mastered"]
+
+        # 渲染卡片
+        st.markdown(f"""
+            <div class="card-box">
+                <div style="color: {'#28a745' if is_m else '#ffc107'}; font-weight: bold;">
+                    {'✅ 已掌握' if is_m else '⏳ 待复习'} (题目 {idx + 1} / {total})
+                </div>
+                <div class="q-text">{card['q']}</div>
+                {"<div class='a-text'>" + card['a'] + "</div>" if user_data["show_answer"] else ""}
+            </div>
+        """, unsafe_allow_html=True)
+
+        # 按钮控制
+        b1, b2, b3, b4 = st.columns(4)
+        with b1:
+            if st.button("⬅️ 上一题", key="btn-prev", use_container_width=True):
+                user_data["current_idx"] -= 1
+                user_data["show_answer"] = False
                 st.rerun()
+        with b2:
+            if st.button("👀 看答案", key="btn-reveal", use_container_width=True):
+                user_data["show_answer"] = not user_data["show_answer"]
+                st.rerun()
+        with b3:
+            if is_m:
+                if st.button("⭐ 已掌握", type="primary", use_container_width=True):
+                    user_data["mastered"].remove(card['q'])
+                    save_current()
+                    st.rerun()
+            else:
+                if st.button("标记掌握", use_container_width=True):
+                    user_data["mastered"].add(card['q'])
+                    save_current()
+                    st.rerun()
+        with b4:
+            if st.button("下一题 ➡️", key="btn-next", use_container_width=True):
+                user_data["current_idx"] += 1
+                user_data["show_answer"] = False
+                save_current()
+                st.rerun()
+        
+        st.caption("提示：支持键盘左右箭头翻页，空格键看答案。")
 
-        # 评分系统
-        if st.session_state.submitted:
-            score = 0
-            results = []
-            for i, q in enumerate(st.session_state.exam_data):
-                u_ans = st.session_state.user_answers.get(i)
-                is_correct = (u_ans == q["answer"])
-                if is_correct: score += 1
-                results.append({"q": q["question"], "u": u_ans, "correct": q["answer"], "res": is_correct})
-            
-            final_score = int((score / len(st.session_state.exam_data)) * 100)
-            
-            st.markdown("---")
-            st.header(f"📊 考试成绩：{final_score} 分")
+# --- 5. 考试模式逻辑 (保持原样好用版) ---
+else:
+    if "exam_list" not in st.session_state:
+        st.session_state.exam_list = None
+
+    if st.session_state.exam_list is None:
+        st.write("准备好了吗？点击下方按钮开始 20 题模拟考（限时 30 分钟）。")
+        if st.button("🏁 开始考试", type="primary"):
+            raw_exam = random.sample(all_cards, min(20, len(all_cards)))
+            st.session_state.exam_list = []
+            for r in raw_exam:
+                wrong = random.sample([a for a in all_answers if a != r['a']], 3)
+                opts = wrong + [r['a']]
+                random.shuffle(opts)
+                st.session_state.exam_list.append({"q": r['q'], "o": opts, "a": r['a']})
+            st.session_state.exam_start = time.time()
+            st.session_state.exam_ans = {}
+            st.session_state.done = False
+            st.rerun()
+    else:
+        elapsed = time.time() - st.session_state.exam_start
+        left = max(0, 1800 - int(elapsed))
+        st.subheader(f"⏳ 剩余时间 {left//60:02d}:{left%60:02d}")
+
+        if left <= 0:
+            st.error("时间到！请交卷。")
+
+        with st.form("quiz_form"):
+            for i, q in enumerate(st.session_state.exam_list):
+                st.write(f"**{i+1}. {q['q']}**")
+                st.session_state.exam_ans[i] = st.radio(f"选项_{i}", q['o'], key=f"ex_{i}", index=None, label_visibility="collapsed")
+                st.write("---")
+            if st.form_submit_button("📤 提交试卷并评分"):
+                st.session_state.done = True
+
+        if st.session_state.get("done"):
+            score = sum(1 for i, q in enumerate(st.session_state.exam_list) if st.session_state.exam_ans.get(i) == q['a'])
+            final_score = int(score / len(st.session_state.exam_list) * 100)
+            st.header(f"📊 考试得分：{final_score} 分")
             if final_score >= 80: st.balloons()
             
-            # 错题回顾
-            with st.expander("查看答题报告"):
-                for r in results:
-                    color = "green" if r['res'] else "red"
-                    st.markdown(f"**问：{r['q']}**")
-                    st.markdown(f"您的答案：:{color}[{r['u']}]")
-                    if not r['res']:
-                        st.markdown(f"正确答案：:green[{r['correct']}]")
-                    st.write("---")
+            with st.expander("查看错题报告"):
+                for i, q in enumerate(st.session_state.exam_list):
+                    u_a = st.session_state.exam_ans.get(i)
+                    is_right = (u_a == q['a'])
+                    st.write(f"**Q{i+1}: {q['q']}**")
+                    st.write(f"{'✅' if is_right else '❌'} 你的答案: {u_a}")
+                    if not is_right: st.write(f"👉 正确答案: {q['a']}")
+                    st.divider()
+
+            if st.button("退出考场并清除记录"):
+                st.session_state.exam_list = None
+                st.session_state.done = False
+                st.rerun()
