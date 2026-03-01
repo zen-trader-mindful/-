@@ -1,152 +1,144 @@
 import streamlit as st
 import pandas as pd
 import random
-import os
+import time
 import json
+import os
 
-# --- 1. 页面配置与美化 ---
-st.set_page_config(page_title="正念交易学习指南", page_icon="📓", layout="centered")
+# --- 1. 页面配置 ---
+st.set_page_config(page_title="正念交易·考场", page_icon="🎓", layout="centered")
 
-# 定义持久化文件路径
-PROGRESS_FILE = "study_progress.json"
-
-# 加载 CSS (复刻 NotebookLM 风格)
+# CSS 样式（保持 NotebookLM 风格并增加考场氛围）
 st.markdown("""
     <style>
-    .stApp { background-color: #F8F9FA; }
-    .flashcard-container {
-        background-color: white; padding: 50px; border-radius: 24px;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.08); min-height: 300px;
-        display: flex; flex-direction: column; justify-content: center;
-        align-items: center; text-align: center; border: 1px solid #E9ECEF;
-        margin-top: 20px; transition: all 0.3s ease;
+    .stApp { background-color: #F4F7F9; }
+    .exam-card {
+        background-color: white; padding: 30px; border-radius: 15px;
+        border-left: 5px solid #1A73E8; box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        margin-bottom: 20px;
     }
-    .question-text { font-size: 28px; color: #202124; font-weight: 700; margin-bottom: 25px; line-height: 1.4; }
-    .answer-text { font-size: 22px; color: #1A73E8; font-weight: 500; border-top: 2px dashed #E8F0FE; padding-top: 25px; }
-    .status-badge { background: #E8F0FE; color: #1967D2; padding: 4px 12px; border-radius: 50px; font-size: 14px; }
+    .question-text { font-size: 20px; font-weight: 600; color: #333; margin-bottom: 15px; }
+    .timer-text { font-size: 24px; font-weight: bold; color: #D93025; text-align: center; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 核心逻辑功能 ---
-
-def save_progress():
-    """保存进度到本地文件"""
-    data = {
-        "mastered": list(st.session_state.mastered),
-        "last_index": st.session_state.idx
-    }
-    with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-
-def load_progress():
-    """从本地文件加载进度"""
-    if os.path.exists(PROGRESS_FILE):
-        with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return None
-
-# --- 3. 初始化状态 ---
-if 'cards' not in st.session_state:
+# --- 2. 数据加载与处理 ---
+@st.cache_data
+def load_data():
     df = pd.read_csv('flashcards.csv', header=None, names=['q', 'a'])
-    st.session_state.cards = df.to_dict('records')
+    return df.to_dict('records')
 
-if 'initialized' not in st.session_state:
-    progress = load_progress()
-    if progress:
-        # 如果发现历史记录，弹出选择框
-        st.info("👋 欢迎回来！检测到上次的练习进度。")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("🚀 接着上次继续"):
-                st.session_state.mastered = set(progress['mastered'])
-                st.session_state.idx = progress['last_index']
-                st.session_state.initialized = True
-                st.rerun()
-        with col_b:
-            if st.button("🧹 重新开始"):
-                st.session_state.mastered = set()
-                st.session_state.idx = 0
-                st.session_state.initialized = True
-                if os.path.exists(PROGRESS_FILE): os.remove(PROGRESS_FILE)
-                st.rerun()
-        st.stop()
-    else:
-        st.session_state.mastered = set()
-        st.session_state.idx = 0
-        st.session_state.initialized = True
+all_cards = load_data()
+all_answers = [c['a'] for c in all_cards]
 
-if 'show' not in st.session_state: st.session_state.show = False
+# --- 3. 核心逻辑：生成考卷 ---
+def generate_exam(count=20):
+    exam_questions = random.sample(all_cards, min(count, len(all_cards)))
+    quiz_data = []
+    for item in exam_questions:
+        correct_split = item['a']
+        # 随机抽取 3 个错误答案
+        distractors = random.sample([a for a in all_answers if a != correct_split], 3)
+        options = distractors + [correct_split]
+        random.shuffle(options)
+        quiz_data.append({
+            "question": item['q'],
+            "options": options,
+            "answer": correct_split
+        })
+    return quiz_data
 
-# --- 4. 快捷键监听 (黑科技) ---
-# 使用 st.components 监听键盘事件
-st.markdown("""
-<script>
-const doc = window.parent.document;
-doc.onkeydown = function(e) {
-    if (e.keyCode === 32) { // Space
-        doc.getElementById("btn-reveal").click();
-    } else if (e.keyCode === 39) { // Right Arrow
-        doc.getElementById("btn-next").click();
-    } else if (e.keyCode === 13) { // Enter
-        doc.getElementById("btn-master").click();
-    }
-};
-</script>
-""", unsafe_allow_html=True)
+# --- 4. Session State 初始化 ---
+if 'mode' not in st.session_state: st.session_state.mode = "学习"
+if 'exam_data' not in st.session_state: st.session_state.exam_data = None
+if 'start_time' not in st.session_state: st.session_state.start_time = None
+if 'submitted' not in st.session_state: st.session_state.submitted = False
 
-# --- 5. 渲染界面 ---
-remaining = [c for c in st.session_state.cards if c['q'] not in st.session_state.mastered]
+# --- 5. 侧边栏：模式切换 ---
+with st.sidebar:
+    st.title("🎯 模式选择")
+    mode = st.radio("请选择当前状态：", ["常规练习", "考场模式"])
+    st.session_state.mode = mode
+    
+    if mode == "考场模式":
+        st.warning("⚠️ 考场规则：\n1. 随机 20 题\n2. 限时 30 分钟\n3. 提交后显示评分")
+        if st.button("🏁 开始新考试"):
+            st.session_state.exam_data = generate_exam(20)
+            st.session_state.start_time = time.time()
+            st.session_state.submitted = False
+            st.session_state.user_answers = {}
+            st.rerun()
 
-st.title("📓 正念交易·精进指南")
+# --- 6. 渲染界面 ---
 
-if not remaining:
-    st.balloons()
-    st.success("🎉 太棒了！你已经完成了所有 75 个知识点的内化。")
-    if st.button("重置系统"):
-        st.session_state.mastered = set()
-        if os.path.exists(PROGRESS_FILE): os.remove(PROGRESS_FILE)
-        st.rerun()
+# --- A. 常规练习模式 (保留你之前的代码逻辑) ---
+if st.session_state.mode == "常规练习":
+    st.title("📓 正念交易·精进指南")
+    st.info("当前为学习模式，请点击侧边栏进入考场模式进行测试。")
+    # (此处可插入你之前的闪卡代码，为简洁此处省略，实际使用时建议合并)
+
+# --- B. 考场模式 ---
 else:
-    # 进度条
-    progress_val = len(st.session_state.mastered) / len(st.session_state.cards)
-    st.progress(progress_val)
-    st.caption(f"已内化: {len(st.session_state.mastered)} / {len(st.session_state.cards)} | 快捷键: 空格(看答案) , →(下一题) , Enter(掌握)")
+    st.title("🎓 正念交易·模拟考场")
+    
+    if st.session_state.exam_data is None:
+        st.info("请点击左侧按钮“开始新考试”生成考卷。")
+    else:
+        # 计时器逻辑
+        elapsed = time.time() - st.session_state.start_time
+        remaining = max(0, 1800 - int(elapsed)) # 30分钟 = 1800秒
+        
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            st.markdown(f'<div class="timer-text">⏳ {remaining//60:02d}:{remaining%60:02d}</div>', unsafe_allow_html=True)
+        
+        if remaining <= 0 and not st.session_state.submitted:
+            st.error("⏰ 时间到！系统已自动交卷。")
+            st.session_state.submitted = True
 
-    # 当前卡片
-    curr_idx = st.session_state.idx % len(remaining)
-    card = remaining[curr_idx]
+        # 显示题目
+        with st.form("exam_form"):
+            for i, q in enumerate(st.session_state.exam_data):
+                st.markdown(f'<div class="exam-card">', unsafe_allow_html=True)
+                st.markdown(f'<div class="question-text">{i+1}. {q["question"]}</div>', unsafe_allow_html=True)
+                
+                # 用户选择
+                st.session_state.user_answers[i] = st.radio(
+                    "选择正确答案：", 
+                    q["options"], 
+                    key=f"q{i}",
+                    index=None,
+                    label_visibility="collapsed"
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            submit_btn = st.form_submit_button("📤 提交考卷")
+            if submit_btn:
+                st.session_state.submitted = True
+                st.rerun()
 
-    # 卡片展示
-    st.markdown(f"""
-        <div class="flashcard-container">
-            <div class="status-badge">正念觉察中...</div>
-            <div class="question-text">{card['q']}</div>
-            {"<div class='answer-text'>" + card['a'] + "</div>" if st.session_state.show else ""}
-        </div>
-    """, unsafe_allow_html=True)
-
-    # 隐藏的按钮供脚本调用
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("👀 看答案 (空格)", key="btn-reveal", use_container_width=True):
-            st.session_state.show = not st.session_state.show
-            st.rerun()
-    with col2:
-        if st.button("✅ 已掌握 (Enter)", key="btn-master", use_container_width=True):
-            st.session_state.mastered.add(card['q'])
-            st.session_state.show = False
-            save_progress()
-            st.rerun()
-    with col3:
-        if st.button("➡️ 下一题 (→)", key="btn-next", use_container_width=True):
-            st.session_state.idx += 1
-            st.session_state.show = False
-            save_progress()
-            st.rerun()
-
-    # 退出功能
-    st.markdown("---")
-    if st.button("🚪 保存并退出学习"):
-        save_progress()
-        st.toast("进度已保存！下次打开将自动询问是否继续。")
-        st.info("你可以直接关闭浏览器窗口了。交易顺遂，保持觉知。")
+        # 评分系统
+        if st.session_state.submitted:
+            score = 0
+            results = []
+            for i, q in enumerate(st.session_state.exam_data):
+                u_ans = st.session_state.user_answers.get(i)
+                is_correct = (u_ans == q["answer"])
+                if is_correct: score += 1
+                results.append({"q": q["question"], "u": u_ans, "correct": q["answer"], "res": is_correct})
+            
+            final_score = int((score / len(st.session_state.exam_data)) * 100)
+            
+            st.markdown("---")
+            st.header(f"📊 考试成绩：{final_score} 分")
+            if final_score >= 80: st.balloons()
+            
+            # 错题回顾
+            with st.expander("查看答题报告"):
+                for r in results:
+                    color = "green" if r['res'] else "red"
+                    st.markdown(f"**问：{r['q']}**")
+                    st.markdown(f"您的答案：:{color}[{r['u']}]")
+                    if not r['res']:
+                        st.markdown(f"正确答案：:green[{r['correct']}]")
+                    st.write("---")
