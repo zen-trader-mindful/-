@@ -44,7 +44,7 @@ st.title("📓 正念交易·精进终端")
 
 c_user, c_mode = st.columns([1, 1])
 with c_user:
-    u_name = st.text_input("👤 学员姓名", value="guest").strip()
+    u_name = st.text_input("👤 学员姓名", value="请填写自己的用户名").strip()
 with c_mode:
     app_mode = st.selectbox("🎮 模式选择", ["学习模式", "考试模式"])
 
@@ -192,3 +192,4 @@ else:
                 st.session_state.exam_list = None
                 st.session_state.done = False
                 st.rerun()
+
